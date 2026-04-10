@@ -29,11 +29,11 @@ python3 build_gzh_update.py
 cp update_patched.GZH /Volumes/YOURUSBDRIVE/update.GZH
 ```
 
-1. Eject the USB stick safely from your Mac
+1. Eject the USB stick safely.
 2. Insert into the dryer's USB port
 3. Power cycle the dryer
-4. The display will go dark briefly during the update (~5 seconds)
-5. After reboot, the display shows **V 1.2.0**
+4. The display will go dark briefly during the update (60 seconds)
+5. After manual reboot, the display shows **V 1.2.0**
 
 ### Method 2: UART bootloader (for dev boards with BOOT0 access)
 
