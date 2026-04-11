@@ -50,7 +50,7 @@ PATCH_DRYER_INJECT    = 0x0F4FE   # M6xxx fallthrough → B.W to dryer router
 # ── Firmware version ──
 PATCH_VERSION = 0x16166    # "1.1.8" in "V 1.1.8" string
 VERSION_OLD   = b'1.1.8'
-VERSION_NEW   = b'1.2.0'
+VERSION_NEW   = b'1.3.0'
 
 # ── Offsets ──
 OFF_HEAT_ENABLE = 0xD4
@@ -222,72 +222,121 @@ def build_handlers():
     t.emovw(1, 0x17A4); t.e16(0x4288); t.e16(0xD101)
     m6052_bw = len(t.code); t.e32(0,0)
 
+    # M6053 check (start zone 1)
+    t.emovw(1, 0x17A5); t.e16(0x4288); t.e16(0xD101)
+    m6053_bw = len(t.code); t.e32(0,0)
+
+    # M6054 check (stop zone 1)
+    t.emovw(1, 0x17A6); t.e16(0x4288); t.e16(0xD101)
+    m6054_bw = len(t.code); t.e32(0,0)
+
     t.ebw(FLASH_EXIT)  # default
 
-    # ════════════ M6050 — START DRYING ════════════
-    t.align4()
-    m6050 = t.pc
-    struct.pack_into('<4s', t.code, m6050_bw, encode_branch(HANDLER_FLASH+m6050_bw, m6050))
+    # ════════════ START DRYING (shared logic) ════════════
+    # M6050 enters with zone=0, M6053 enters with zone=1
+    # Zone is passed in R3 (preserved across the handler)
 
-    t.e16(0xB470); t.e16(0xB082)  # PUSH{R4,R5,R6}; SUB SP,#8
-    # Stack: 12+8=20 → local_30 at SP+124
+    def emit_start_entry(bw_off, zone):
+        """Emit entry stub that sets zone and falls through to shared code."""
+        t.align4()
+        addr = t.pc
+        struct.pack_into('<4s', t.code, bw_off, encode_branch(HANDLER_FLASH+bw_off, addr))
+        t.e16(0x2300 | zone)   # MOVS R3, #zone
+        return addr
+
+    m6050 = emit_start_entry(m6050_bw, 0)  # M6050 → zone 0
+    # M6053 entry merges here after setting R3=1 (emitted below)
+    m6050_shared = len(t.code)  # remember for M6053 branch target
+
+    t.e16(0xB4F8); t.e16(0xB082)  # PUSH{R3,R4,R5,R6,R7}; SUB SP,#8
+    # Stack: 20+8=28 → local_30 at SP+132
+    # R3 (zone) is saved on stack at SP+8 (first pushed reg)
 
     t.e32(0xF8D4, 0x5030)   # LDR.W R5, [R4, #0x30] (I=temp)
     t.e32(0xF8D4, 0x6038)   # LDR.W R6, [R4, #0x38] (T=time)
+    t.e16(0x461F)            # MOV R7, R3  (save zone in R7)
 
-    # Write target temp as float to settings+0x30 (FUN_0801f2e8 reads this)
+    # Write target temp as float to settings+0x30 (zone 0) or +0x40 (zone 1)
     t.eldr_lit(0, 'settings'); t.e16(0x6800)  # R0 = settings
-    t.e32(0xEE00, 0x5A10)   # VMOV S0, R5       (int → FPU)
+    t.e32(0xEE00, 0x5A10)   # VMOV S0, R5
     t.e32(0xEEB8, 0x0AC0)   # VCVT.F32.S32 S0, S0
-    t.e32(0xED80, 0x0A0C)   # VSTR S0, [R0, #0x30]  (target temp float)
+    # Offset = 0x30 + zone*0x10: compute R1 = 0x30 + R7*16
+    t.e16(0x2130)            # MOVS R1, #0x30
+    t.e32(0xEB01, 0x1107)    # ADD.W R1, R1, R7, LSL #4  (R1 = 0x30 or 0x40)
+    # VSTR S0, [R0, R1] — no direct encoding, use ADD then VSTR [R0, #0]
+    t.e16(0x1840)            # ADD R0, R0, R1
+    t.e32(0xED80, 0x0A00)   # VSTR S0, [R0, #0]
 
-    # Write timer: hours and minutes to settings
+    # Restore R0 = settings for timer writes
+    t.eldr_lit(0, 'settings'); t.e16(0x6800)
+
+    # Write timer: hours and minutes
     t.e16(0x213C)            # R1 = 60
-    t.e32(0xFBB6, 0xF2F1)   # UDIV R2, R6, R1   (hours = time_min / 60)
-    t.e32(0xF8C0, 0x2038)   # STR.W R2, [R0, #0x38]  (hours)
-    t.e32(0xFB02, 0x6611)   # MLS R6, R2, R1, R6 (mins = time_min - hours*60)
-    t.e32(0xF8C0, 0x603C)   # STR.W R6, [R0, #0x3C]  (minutes)
+    t.e32(0xFBB6, 0xF2F1)   # UDIV R2, R6, R1
+    t.e32(0xF8C0, 0x2038)   # STR.W R2, [R0, #0x38]
+    t.e32(0xFB02, 0x6611)   # MLS R6, R2, R1, R6
+    t.e32(0xF8C0, 0x603C)   # STR.W R6, [R0, #0x3C]
 
     # Set heating enable flag
-    t.eldr_lit(0, 'main_st'); t.e16(0x6800)  # R0 = main_state
-    t.e16(0x2101); t.e32(0xF8C0, 0x10D4)     # *(R0+0xD4)=1
+    t.eldr_lit(0, 'main_st'); t.e16(0x6800)
+    t.e16(0x2101); t.e32(0xF8C0, 0x10D4)  # *(R0+0xD4) = 1
 
-    # Call FUN_0801f2e8(0) — proper drying cycle init (PID, timer, state machine)
-    t.e16(0x2000)            # R0 = 0 (zone 0)
+    # Call FUN_0801f2e8(zone)
+    t.e16(0x4638)            # MOV R0, R7  (zone)
     t.ebl(FLASH_FUN_F2E8)
 
     # Response
-    t.e32(0xF8D4, 0x5030)   # reload R5 from parsed cmd (BL clobbered it)
-    t.e16(0x9800|(124//4))   # LDR R0, [SP, #124] → UART ctx
+    t.e32(0xF8D4, 0x5030)   # reload R5
+    t.e16(0x9800|(132//4))   # LDR R0, [SP, #132] → UART ctx
     t.eldr_lit(1, 'fmt_6050')
     t.e16(0x462A)            # MOV R2, R5
     t.e32(0xF8D4, 0x3038)   # LDR.W R3, [R4, #0x38]
     t.ebl(FLASH_FUN_C3A8)
 
-    t.e16(0xB002); t.e16(0xBC70)  # ADD SP,#8; POP{R4,R5,R6}
+    t.e16(0xB002); t.e16(0xBCF8)  # ADD SP,#8; POP{R3,R4,R5,R6,R7}
     t.ebw(FLASH_EXIT)
 
-    # ════════════ M6051 — STOP DRYING ════════════
-    t.align4()
-    m6051 = t.pc
-    struct.pack_into('<4s', t.code, m6051_bw, encode_branch(HANDLER_FLASH+m6051_bw, m6051))
+    # M6053 entry → zone 1, then jump to shared code
+    m6053 = emit_start_entry(m6053_bw, 1)
+    t.ebw(HANDLER_FLASH + m6050_shared)  # B.W to shared start handler
 
-    t.e16(0xB410); t.e16(0xB082)  # PUSH{R4}; SUB SP,#8
-    # Stack: 4+8=12 → local_30 at SP+116
+    # ════════════ STOP DRYING (shared logic) ════════════
+    # M6051 enters with zone=0, M6054 enters with zone=1
 
+    def emit_stop_entry(bw_off, zone):
+        t.align4()
+        addr = t.pc
+        struct.pack_into('<4s', t.code, bw_off, encode_branch(HANDLER_FLASH+bw_off, addr))
+        t.e16(0x2300 | zone)  # MOVS R3, #zone
+        return addr
+
+    m6051 = emit_stop_entry(m6051_bw, 0)
+    m6051_shared = len(t.code)
+
+    t.e16(0xB418); t.e16(0xB082)  # PUSH{R3,R4}; SUB SP,#8
+    # Stack: 8+8=16 → local_30 at SP+120
+
+    # Clear heating enable + PWMs
     t.eldr_lit(0, 'main_st'); t.e16(0x6800)
     t.e16(0x2100)
     t.e32(0xF8C0, 0x10D4)
     t.e32(0xF8C0, 0x1000|OFF_HEATER_PWM0)
     t.e32(0xF8C0, 0x1000|OFF_HEATER_PWM1)
-    t.e16(0x2000); t.ebl(FLASH_FUN_F480)
 
-    t.e16(0x9800|(116//4))
+    # Call FUN_0801f480(zone)
+    t.e16(0x4618)            # MOV R0, R3  (zone)
+    t.ebl(FLASH_FUN_F480)
+
+    t.e16(0x9800|(120//4))   # LDR R0, [SP, #120]
     t.eldr_lit(1, 'fmt_6051')
     t.ebl(FLASH_FUN_C3A8)
 
-    t.e16(0xB002); t.e16(0xBC10)
+    t.e16(0xB002); t.e16(0xBC18)  # ADD SP,#8; POP{R3,R4}
     t.ebw(FLASH_EXIT)
+
+    # M6054 entry → zone 1
+    m6054 = emit_stop_entry(m6054_bw, 1)
+    t.ebw(HANDLER_FLASH + m6051_shared)
 
     # ════════════ M6052 — STATUS QUERY ════════════
     t.align4()
