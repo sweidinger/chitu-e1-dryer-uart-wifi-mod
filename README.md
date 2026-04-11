@@ -1,6 +1,6 @@
-# Chitu E1 Resin Dryer — Custom Firmware (V 1.3.0)
+# Chitu E1 Filament Dryer — Custom Firmware (V 1.3.0)
 
-Firmware modification for the Chitu Systems E1 resin curing/drying station that adds full UART control — temperature/humidity sensors, drying start/stop, and status queries. Designed for integration with ESP32 + ESPHome for remote control via Home Assistant.
+Firmware modification for the Chitu Systems E1 filament drying station that adds full UART control — temperature/humidity sensors, drying start/stop, and status queries. Designed for integration with ESP32 + ESPHome for remote control via Home Assistant.
 
 ## What's added
 
