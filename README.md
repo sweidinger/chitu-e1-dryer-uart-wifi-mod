@@ -1,4 +1,4 @@
-# Chitu E1 Filament Dryer — Custom Firmware (V 1.2.0)
+# Chitu E1 Resin Dryer — Custom Firmware (V 1.3.0)
 
 Firmware modification for the Chitu Systems E1 resin curing/drying station that adds full UART control — temperature/humidity sensors, drying start/stop, and status queries. Designed for integration with ESP32 + ESPHome for remote control via Home Assistant.
 
@@ -10,6 +10,8 @@ Firmware modification for the Chitu Systems E1 resin curing/drying station that 
 | `M6050 I<°C> T<min>` | Start drying at target temp for N minutes | `M6050 I40 T30` |
 | `M6051` | Stop drying | `ok Drying stopped` |
 | `M6052` | Query box presence + heating state | `ok B0:1 B1:0 S0:0 S1:0` |
+| `M6053 I<°C> T<min>` | Start drying **zone 1** (bottom chamber) | `M6053 I55 T60` |
+| `M6054` | Stop drying **zone 1** | `ok Drying stopped` |
 
 The original firmware returned **zero bytes** for M105 (the feature was never implemented). M6050/M6051/M6052 are entirely new commands.
 
@@ -29,11 +31,11 @@ python3 build_gzh_update.py
 cp update_patched.GZH /Volumes/YOURUSBDRIVE/update.GZH
 ```
 
-1. Eject the USB stick safely.
+1. Eject the USB stick safely from your Mac
 2. Insert into the dryer's USB port
 3. Power cycle the dryer
-4. The display will go dark briefly during the update (60 seconds)
-5. After manual reboot, the display shows **V 1.2.0**
+4. The display will go dark briefly during the update (~5 seconds)
+5. After reboot, the display shows **V 1.3.0**
 
 ### Method 2: UART bootloader (for dev boards with BOOT0 access)
 
@@ -84,10 +86,10 @@ Every command returns one or more lines ending with `\r\n`. The last line is alw
 - `T:124 H:99` = sensor not connected
 - Safe to poll every 1–10 seconds
 
-### M6050 — Start drying
+### M6050 / M6053 — Start drying (zone 0 / zone 1)
 
 ```
-→ M6050 I55 T30\n
+→ M6050 I55 T30\n       (zone 0 — top chamber)
 ← ok Drying T:55 I:30\r\n
 ← ok N:2\r\n
 ```
@@ -97,11 +99,15 @@ Every command returns one or more lines ending with `\r\n`. The last line is alw
 | I | Target temperature in °C | `I40` = 40°C |
 | T | Drying time in minutes | `T30` = 30 minutes |
 
-- Enables heater at 100% PWM
+- Each zone is controlled independently
+- Enables heater at 100% PWM for the specified zone
 - Firmware PID loop regulates to the target temperature
 - Timer counts down from the specified duration
+- Both zones can run simultaneously with different settings
 
-### M6051 — Stop drying
+**M6053** works identically but targets **zone 1** (bottom chamber).
+
+### M6051 / M6054 — Stop drying (zone 0 / zone 1)
 
 ```
 → M6051\n
@@ -109,7 +115,8 @@ Every command returns one or more lines ending with `\r\n`. The last line is alw
 ← ok N:3\r\n
 ```
 
-- Turns off heater, clears PWM for both zones
+- `M6051` stops zone 0, `M6054` stops zone 1
+- Stops the specified zone only; the other zone keeps running
 - Safe to call even when not drying
 
 ### M6052 — Query status
@@ -183,19 +190,24 @@ sensor:
 
 button:
   - platform: template
-    name: "Start Drying 40°C 30min"
+    name: "Start Zone 0 (40°C 30min)"
     on_press:
       - uart.write: "M6050 I40 T30\n"
 
   - platform: template
-    name: "Start Drying 55°C 60min"
+    name: "Start Zone 1 (55°C 60min)"
     on_press:
-      - uart.write: "M6050 I55 T60\n"
+      - uart.write: "M6053 I55 T60\n"
 
   - platform: template
-    name: "Stop Drying"
+    name: "Stop Zone 0"
     on_press:
       - uart.write: "M6051\n"
+
+  - platform: template
+    name: "Stop Zone 1"
+    on_press:
+      - uart.write: "M6054\n"
 
 interval:
   - interval: 10s
@@ -239,7 +251,7 @@ All patches are applied by Python scripts — no cross-compiler needed.
 
 | File | Description |
 |------|-------------|
-| `update_patched.GZH` | Ready-to-flash USB update (V 1.2.0) |
+| `update_patched.GZH` | Ready-to-flash USB update (V 1.3.0) |
 | `update.GZH.orig` | Original stock firmware update (backup) |
 | `chitu_e1_dryer_patched.bin` | Full 512KB image for stm32flash |
 | `chitu_e1_bootloader_plus_firmware.bin` | Clean unpatched combined image |
@@ -266,7 +278,7 @@ The Chitu GZH update format uses a position-dependent XOR cipher with 2048-byte 
 
 ### Limitations
 
-- M6050 starts **zone 0 only** (the primary heating zone)
+- M6050/M6051 control zone 0, M6053/M6054 control zone 1 independently
 - Box detection depends on hardware GPIO switches — if damaged, `M6052 B` values may be incorrect
 - The overwritten print progress page will show blank if somehow navigated to (impossible on a dryer)
 - Settings written by M6050 may persist to SPI flash; use `M8500` to reset if needed
