@@ -7,13 +7,13 @@ Firmware modification for the Chitu Systems E1 filament drying station that adds
 | Command | Function | Example |
 |---------|----------|---------|
 | `M105` | Read temperature & humidity (2 sensors) | `ok T0:25 H0:23 T1:24 H1:24` |
-| `M6050 I<°C> T<min>` | Start drying at target temp for N minutes | `M6050 I40 T30` |
-| `M6051` | Stop drying | `ok Drying stopped` |
-| `M6052` | Query box presence + heating state | `ok B0:1 B1:0 S0:0 S1:0` |
+| `M6050 I<°C> T<min>` | Start drying **zone 0** (top chamber) | `M6050 I40 T30` |
+| `M6051` | Stop drying **zone 0** | `ok Drying stopped` |
+| `M6052` | Query box presence + heating state (both zones) | `ok B0:1 B1:0 S0:0 S1:0` |
 | `M6053 I<°C> T<min>` | Start drying **zone 1** (bottom chamber) | `M6053 I55 T60` |
 | `M6054` | Stop drying **zone 1** | `ok Drying stopped` |
 
-The original firmware returned **zero bytes** for M105 (the feature was never implemented). M6050/M6051/M6052 are entirely new commands.
+The original firmware returned **zero bytes** for M105 (the feature was never implemented). All M60xx commands are custom additions. Each chamber/box has independent temperature, humidity, and drying control.
 
 ---
 
